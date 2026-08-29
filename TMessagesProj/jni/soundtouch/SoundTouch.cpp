@@ -536,3 +536,46 @@ double SoundTouch::getInputOutputSampleRatio()
 {
     return 1.0 / (tempo * rate);
 }
+
+/* ========================================================================= */
+/* C-Bridge for Telegram Voice Note Recording (Pitch Shift: -2.0 Semitones)  */
+/* ========================================================================= */
+
+static soundtouch::SoundTouch *g_soundTouchRecorder = nullptr;
+
+extern "C" {
+
+void soundtouch_init_recorder(int sampleRate, float pitchSemitones) {
+    if (!g_soundTouchRecorder) {
+        g_soundTouchRecorder = new soundtouch::SoundTouch();
+    }
+    g_soundTouchRecorder->clear();
+    g_soundTouchRecorder->setSampleRate(sampleRate);
+    g_soundTouchRecorder->setChannels(1); // Mono for voice messages
+    g_soundTouchRecorder->setPitchSemiTones(pitchSemitones);
+    g_soundTouchRecorder->setTempo(1.0f); // Normal speed
+}
+
+void soundtouch_put_samples(const short *samples, int numSamples) {
+    if (g_soundTouchRecorder) {
+        g_soundTouchRecorder->putSamples((const soundtouch::SAMPLETYPE*)samples, numSamples);
+    }
+}
+
+int soundtouch_receive_samples(short *output, int maxSamples) {
+    if (!g_soundTouchRecorder) return 0;
+    return (int)g_soundTouchRecorder->receiveSamples((soundtouch::SAMPLETYPE*)output, maxSamples);
+}
+
+int soundtouch_num_samples(void) {
+    if (!g_soundTouchRecorder) return 0;
+    return (int)g_soundTouchRecorder->numSamples();
+}
+
+void soundtouch_clear_recorder(void) {
+    if (g_soundTouchRecorder) {
+        g_soundTouchRecorder->clear();
+    }
+}
+
+}

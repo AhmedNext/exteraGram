@@ -307,25 +307,6 @@ target_include_directories(breakpad PUBLIC
         third_party/breakpad/src/common/android/include
         third_party/breakpad/src)
 
-#soundtouch
-add_library(soundtouch STATIC
-        soundtouch/SoundTouch.cpp
-        soundtouch/TDStretch.cpp
-        soundtouch/RateTransposer.cpp
-        soundtouch/AAFilter.cpp
-        soundtouch/FIRFilter.cpp
-        soundtouch/FIFOSampleBuffer.cpp
-        soundtouch/InterpolateCubic.cpp
-        soundtouch/InterpolateLinear.cpp
-        soundtouch/InterpolateShannon.cpp
-        soundtouch/cpu_detect_x86.cpp)
-target_compile_options(soundtouch PUBLIC
-        -O3 -finline-functions -fPIC -frtti)
-set_target_properties(soundtouch PROPERTIES
-        ANDROID_ARM_MODE arm)
-target_include_directories(soundtouch PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/soundtouch
-        ${CMAKE_CURRENT_SOURCE_DIR})
 #voip
 include(${CMAKE_HOME_DIRECTORY}/voip/CMakeLists.txt)
 
@@ -350,7 +331,17 @@ add_library(${NATIVE_LIB} SHARED
         exoplayer/ffmpeg_jni.cc
         fast-edge.cpp
         genann.c
-        secureid_ocr.cpp)
+        secureid_ocr.cpp
+        soundtouch/SoundTouch.cpp
+        soundtouch/TDStretch.cpp
+        soundtouch/RateTransposer.cpp
+        soundtouch/AAFilter.cpp
+        soundtouch/FIRFilter.cpp
+        soundtouch/FIFOSampleBuffer.cpp
+        soundtouch/InterpolateCubic.cpp
+        soundtouch/InterpolateLinear.cpp
+        soundtouch/InterpolateShannon.cpp
+        soundtouch/cpu_detect_x86.cpp)
 
 target_compile_options(${NATIVE_LIB} PUBLIC
         -ffast-math -Os -funroll-loops -ffast-math -fno-strict-aliasing -fno-math-errno)
@@ -586,6 +577,7 @@ target_sources(${NATIVE_LIB} PRIVATE
 
 target_include_directories(${NATIVE_LIB} PUBLIC
         soundtouch
+        ${CMAKE_CURRENT_SOURCE_DIR}/soundtouch
         opus/include
         opus/silk
         opus/silk/fixed
@@ -606,7 +598,6 @@ target_include_directories(${NATIVE_LIB} PUBLIC
 
 target_link_libraries(${NATIVE_LIB}
         -Wl,--whole-archive rnnoise openh264 voipandroid -Wl,--no-whole-archive
-        soundtouch
         tgvoip
         tgcalls
         tgcalls_tp
