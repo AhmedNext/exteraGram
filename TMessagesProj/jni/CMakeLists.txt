@@ -307,6 +307,24 @@ target_include_directories(breakpad PUBLIC
         third_party/breakpad/src/common/android/include
         third_party/breakpad/src)
 
+#soundtouch
+add_library(soundtouch STATIC
+        soundtouch/SoundTouch.cpp
+        soundtouch/TDStretch.cpp
+        soundtouch/RateTransposer.cpp
+        soundtouch/AAFilter.cpp
+        soundtouch/FIRFilter.cpp
+        soundtouch/FIFOSampleBuffer.cpp
+        soundtouch/InterpolateCubic.cpp
+        soundtouch/InterpolateLinear.cpp
+        soundtouch/InterpolateShannon.cpp
+        soundtouch/cpu_detect_x86.cpp)
+target_compile_options(soundtouch PUBLIC
+        -O3 -finline-functions -fPIC -frtti)
+set_target_properties(soundtouch PROPERTIES
+        ANDROID_ARM_MODE arm)
+target_include_directories(soundtouch PUBLIC
+        soundtouch)
 
 #voip
 include(${CMAKE_HOME_DIRECTORY}/voip/CMakeLists.txt)
@@ -567,6 +585,7 @@ target_sources(${NATIVE_LIB} PRIVATE
         third_party/libyuv/source/scale_rgb.cc)
 
 target_include_directories(${NATIVE_LIB} PUBLIC
+        soundtouch
         opus/include
         opus/silk
         opus/silk/fixed
@@ -587,6 +606,7 @@ target_include_directories(${NATIVE_LIB} PUBLIC
 
 target_link_libraries(${NATIVE_LIB}
         -Wl,--whole-archive rnnoise openh264 voipandroid -Wl,--no-whole-archive
+        soundtouch
         tgvoip
         tgcalls
         tgcalls_tp
@@ -614,12 +634,6 @@ target_link_libraries(${NATIVE_LIB}
         OpenSLES
         cpufeatures
         breakpad)
-
-#if (${ANDROID_ABI} STREQUAL "x86" OR ${ANDROID_ABI} STREQUAL "x86_64")
-#    target_link_libraries(${NATIVE_LIB}
-#            -Wl,--whole-archive vpxasm -Wl,--no-whole-archive
-#            c)
-#endif()
 
 include(AndroidNdkModules)
 android_ndk_import_module_cpufeatures()
