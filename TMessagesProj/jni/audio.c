@@ -8,14 +8,20 @@
 #include <math.h>
 #include "c_utils.h"
 
+/* SoundTouch C-Bridge Functions */
+extern void soundtouch_init_recorder(int sampleRate, float pitchSemitones);
+extern void soundtouch_put_samples(const short *samples, int numSamples);
+extern int soundtouch_receive_samples(short *output, int maxSamples);
+extern int soundtouch_num_samples(void);
+extern void soundtouch_clear_recorder(void);
+
 typedef struct {
     int version;
-    int channels; /* Number of channels: 1..255 */
+    int channels;
     int preskip;
     ogg_uint32_t input_sample_rate;
-    int gain; /* in dB S7.8 should be zero whenever possible */
+    int gain;
     int channel_mapping;
-    /* The rest is only used if channel_mapping != 0 */
     int nb_streams;
     int nb_coupled;
     unsigned char stream_map[255];
@@ -73,45 +79,12 @@ static int write_uint16(Packet *p, ogg_uint16_t val) {
     return 1;
 }
 
-static int write_chars(Packet *p, const unsigned char *str, int nb_chars)
-{
+static int write_chars(Packet *p, const unsigned char *str, int nb_chars) {
     int i;
     if (p->pos>p->maxlen-nb_chars)
         return 0;
     for (i=0;i<nb_chars;i++)
         p->data[p->pos++] = str[i];
-    return 1;
-}
-
-static int read_uint32(ROPacket *p, ogg_uint32_t *val)
-{
-    if (p->pos>p->maxlen-4)
-        return 0;
-    *val =  (ogg_uint32_t)p->data[p->pos  ];
-    *val |= (ogg_uint32_t)p->data[p->pos+1]<< 8;
-    *val |= (ogg_uint32_t)p->data[p->pos+2]<<16;
-    *val |= (ogg_uint32_t)p->data[p->pos+3]<<24;
-    p->pos += 4;
-    return 1;
-}
-
-static int read_uint16(ROPacket *p, ogg_uint16_t *val)
-{
-    if (p->pos>p->maxlen-2)
-        return 0;
-    *val =  (ogg_uint16_t)p->data[p->pos  ];
-    *val |= (ogg_uint16_t)p->data[p->pos+1]<<8;
-    p->pos += 2;
-    return 1;
-}
-
-static int read_chars(ROPacket *p, unsigned char *str, int nb_chars)
-{
-    int i;
-    if (p->pos>p->maxlen-nb_chars)
-        return 0;
-    for (i=0;i<nb_chars;i++)
-        str[i] = p->data[p->pos++];
     return 1;
 }
 
@@ -168,7 +141,6 @@ int opus_header_to_packet(const OpusHeader *h, unsigned char *packet, int len) {
             return 0;
         }
         
-        /* Multi-stream support */
         for (i = 0; i < h->channels; i++) {
             if (!write_chars(&p, &h->stream_map[i], 1)) {
                 return 0;
@@ -186,7 +158,6 @@ buf[base] = (val) & 0xff; \
 } while(0)
 
 static void comment_init(char **comments, int *length, const char *vendor_string) {
-    // The 'vendor' field should be the actual encoding library used
     size_t vendor_length = strlen(vendor_string);
     int user_comment_list_length = 0;
     size_t len = 8 + 4 + vendor_length + 4;
@@ -202,7 +173,6 @@ static void comment_init(char **comments, int *length, const char *vendor_string
 static void comment_pad(char **comments, int* length, size_t amount) {
     if (amount > 0) {
         char *p = *comments;
-        // Make sure there is at least amount worth of padding free, and round up to the maximum that fits in the current ogg segments
         size_t newlen = (*length + amount + 255) / 255 * 255 - 1;
         p = realloc(p, newlen);
         for (int32_t i = *length; i < newlen; i++) {
@@ -248,7 +218,6 @@ int size_segments;
 int last_segments;
 
 void cleanupRecorder() {
-    
     ogg_stream_flush(&os, &og);
     
     if (_encoder) {
@@ -267,6 +236,8 @@ void cleanupRecorder() {
         fclose(_fileOs);
         _fileOs = 0;
     }
+    
+    soundtouch_clear_recorder();
     
     _packetId = -1;
     bytes_written = 0;
@@ -299,6 +270,9 @@ int initRecorder(const char *path, opus_int32 sampleRate) {
         LOGE("error cannot open file: %s", path);
         return 0;
     }
+    
+    /* Initialize SoundTouch with -2 semitones */
+    soundtouch_init_recorder(rate, -2.0f);
     
     inopt.rate = rate;
     inopt.gain = 0;
@@ -334,7 +308,6 @@ int initRecorder(const char *path, opus_int32 sampleRate) {
     _packet = malloc(max_frame_bytes);
     
     result = opus_encoder_ctl(_encoder, OPUS_SET_BITRATE(bitrate));
-    //result = opus_encoder_ctl(_encoder, OPUS_SET_COMPLEXITY(10));
     if (result != OPUS_OK) {
         LOGE("Error OPUS_SET_BITRATE returned: %s", opus_strerror(result));
         return 0;
@@ -415,98 +388,81 @@ int initRecorder(const char *path, opus_int32 sampleRate) {
     
     return 1;
 }
+
 int writeFrame(uint8_t *framePcmBytes, uint32_t frameByteCount) {
     size_t cur_frame_size = frame_size;
-    _packetId++;
-    
     opus_int32 nb_samples = frameByteCount / 2;
-    total_samples += nb_samples;
-    if (nb_samples < frame_size) {
-        op.e_o_s = 1;
-    } else {
+    if (nb_samples == 0) return 1;
+
+    /* Push raw recorded PCM to SoundTouch */
+    soundtouch_put_samples((const short *)framePcmBytes, nb_samples);
+
+    /* Process shifted frames through Opus */
+    while (soundtouch_num_samples() >= cur_frame_size) {
+        _packetId++;
+        short shiftedPcm[960];
+        int received = soundtouch_receive_samples(shiftedPcm, cur_frame_size);
+        if (received <= 0) break;
+
+        total_samples += received;
         op.e_o_s = 0;
-    }
-    
-    int nbBytes = 0;
-    
-    if (nb_samples != 0) {
-        uint8_t *paddedFrameBytes = framePcmBytes;
-        int freePaddedFrameBytes = 0;
-        
-        if (nb_samples < cur_frame_size) {
-            paddedFrameBytes = malloc(cur_frame_size * 2);
-            freePaddedFrameBytes = 1;
-            memcpy(paddedFrameBytes, framePcmBytes, frameByteCount);
-            memset(paddedFrameBytes + nb_samples * 2, 0, cur_frame_size * 2 - nb_samples * 2);
-        }
-        
-        nbBytes = opus_encode(_encoder, (opus_int16 *)paddedFrameBytes, cur_frame_size, _packet, max_frame_bytes / 10);
-        if (freePaddedFrameBytes) {
-            free(paddedFrameBytes);
-        }
-        
+
+        int nbBytes = opus_encode(_encoder, (opus_int16 *)shiftedPcm, cur_frame_size, _packet, max_frame_bytes / 10);
         if (nbBytes < 0) {
             LOGE("Encoding failed: %s. Aborting.", opus_strerror(nbBytes));
             return 0;
         }
-        
+
         enc_granulepos += cur_frame_size * 48000 / coding_rate;
         size_segments = (nbBytes + 255) / 255;
         min_bytes = MIN(nbBytes, min_bytes);
-    }
-    
-    while ((((size_segments <= 255) && (last_segments + size_segments > 255)) || (enc_granulepos - last_granulepos > max_ogg_delay)) && ogg_stream_flush_fill(&os, &og, 255 * 255)) {
-        if (ogg_page_packets(&og) != 0) {
-            last_granulepos = ogg_page_granulepos(&og);
+
+        while ((((size_segments <= 255) && (last_segments + size_segments > 255)) || (enc_granulepos - last_granulepos > max_ogg_delay)) && ogg_stream_flush_fill(&os, &og, 255 * 255)) {
+            if (ogg_page_packets(&og) != 0) {
+                last_granulepos = ogg_page_granulepos(&og);
+            }
+            last_segments -= og.header[26];
+            int writtenPageBytes = writeOggPage(&og, _fileOs);
+            if (writtenPageBytes != og.header_len + og.body_len) {
+                LOGE("Error: failed writing data to output stream");
+                return 0;
+            }
+            bytes_written += writtenPageBytes;
+            pages_out++;
         }
-        
-        last_segments -= og.header[26];
-        int writtenPageBytes = writeOggPage(&og, _fileOs);
-        if (writtenPageBytes != og.header_len + og.body_len) {
-            LOGE("Error: failed writing data to output stream");
-            return 0;
+
+        op.packet = _packet;
+        op.bytes = nbBytes;
+        op.b_o_s = 0;
+        op.granulepos = enc_granulepos;
+        op.packetno = 2 + _packetId;
+        ogg_stream_packetin(&os, &op);
+        last_segments += size_segments;
+
+        while ((op.e_o_s || (enc_granulepos + (frame_size * 48000 / coding_rate) - last_granulepos > max_ogg_delay) || (last_segments >= 255)) ? ogg_stream_flush_fill(&os, &og, 255 * 255) : ogg_stream_pageout_fill(&os, &og, 255 * 255)) {
+            if (ogg_page_packets(&og) != 0) {
+                last_granulepos = ogg_page_granulepos(&og);
+            }
+            last_segments -= og.header[26];
+            int writtenPageBytes = writeOggPage(&og, _fileOs);
+            if (writtenPageBytes != og.header_len + og.body_len) {
+                LOGE("Error: failed writing data to output stream");
+                return 0;
+            }
+            bytes_written += writtenPageBytes;
+            pages_out++;
         }
-        bytes_written += writtenPageBytes;
-        pages_out++;
     }
-    
-    op.packet = _packet;
-    op.bytes = nbBytes;
-    op.b_o_s = 0;
-    op.granulepos = enc_granulepos;
-    if (op.e_o_s) {
-        op.granulepos = ((total_samples * 48000 + rate - 1) / rate) + header.preskip;
-    }
-    op.packetno = 2 + _packetId;
-    ogg_stream_packetin(&os, &op);
-    last_segments += size_segments;
-    
-    while ((op.e_o_s || (enc_granulepos + (frame_size * 48000 / coding_rate) - last_granulepos > max_ogg_delay) || (last_segments >= 255)) ? ogg_stream_flush_fill(&os, &og, 255 * 255) : ogg_stream_pageout_fill(&os, &og, 255 * 255)) {
-        if (ogg_page_packets(&og) != 0) {
-            last_granulepos = ogg_page_granulepos(&og);
-        }
-        last_segments -= og.header[26];
-        int writtenPageBytes = writeOggPage(&og, _fileOs);
-        if (writtenPageBytes != og.header_len + og.body_len) {
-            LOGE("Error: failed writing data to output stream");
-            return 0;
-        }
-        bytes_written += writtenPageBytes;
-        pages_out++;
-    }
-    
+
     return 1;
 }
 
 JNIEXPORT jint Java_org_telegram_messenger_MediaController_startRecord(JNIEnv *env, jclass class, jstring path, jint sampleRate) {
     const char *pathStr = (*env)->GetStringUTFChars(env, path, 0);
-
     int32_t result = initRecorder(pathStr, sampleRate);
-    
     if (pathStr != 0) {
         (*env)->ReleaseStringUTFChars(env, path, pathStr);
     }
-    
     return result;
 }
 
@@ -521,9 +477,7 @@ JNIEXPORT void Java_org_telegram_messenger_MediaController_stopRecord(JNIEnv *en
 
 JNIEXPORT jint Java_org_telegram_messenger_MediaController_isOpusFile(JNIEnv *env, jclass class, jstring path) {
     const char *pathStr = (*env)->GetStringUTFChars(env, path, 0);
-    
     int32_t result = 0;
-    
     int32_t error = OPUS_OK;
     OggOpusFile *file = op_test_file(pathStr, &error);
     if (file != NULL) {
@@ -531,11 +485,9 @@ JNIEXPORT jint Java_org_telegram_messenger_MediaController_isOpusFile(JNIEnv *en
         op_free(file);
         result = error == OPUS_OK;
     }
-    
     if (pathStr != 0) {
         (*env)->ReleaseStringUTFChars(env, path, pathStr);
     }
-    
     return result;
 }
 
@@ -546,9 +498,7 @@ static inline void set_bits(uint8_t *bytes, int32_t bitOffset, int32_t value) {
 }
 
 JNIEXPORT jbyteArray Java_org_telegram_messenger_MediaController_getWaveform2(JNIEnv *env, jclass class, jshortArray array, jint length) {
-
     jshort *sampleBuffer = (*env)->GetShortArrayElements(env, array, 0);
-
     const int32_t resultSamples = 100;
     uint16_t *samples = malloc(100 * 2);
     uint64_t sampleIndex = 0;
@@ -599,7 +549,6 @@ JNIEXPORT jbyteArray Java_org_telegram_messenger_MediaController_getWaveform2(JN
         (*env)->SetByteArrayRegion(env, result, 0, bitstreamLength, (jbyte *) bytes);
     }
     free(samples);
-    
     return result;
 }
 
@@ -617,14 +566,12 @@ JNIEXPORT jbyteArray Java_org_telegram_messenger_MediaController_getWaveform(JNI
         int32_t sampleRate = MAX(1, (int32_t) (totalSamples / resultSamples));
 
         uint16_t *samples = malloc(100 * 2);
-
         size_t bufferSize = 1024 * 128;
         if (sampleBuffer == NULL) {
             sampleBuffer = malloc(bufferSize);
         }
         uint64_t sampleIndex = 0;
         uint16_t peakSample = 0;
-
         int32_t index = 0;
 
         while (1) {
@@ -662,7 +609,6 @@ JNIEXPORT jbyteArray Java_org_telegram_messenger_MediaController_getWaveform(JNI
             }
         }
 
-        //free(sampleBuffer);
         op_free(opusFile);
 
         uint32_t bitstreamLength = (resultSamples * 5) / 8 + 1;
@@ -670,12 +616,10 @@ JNIEXPORT jbyteArray Java_org_telegram_messenger_MediaController_getWaveform(JNI
         if (result) {
             uint8_t *bytes = malloc(bitstreamLength + 4);
             memset(bytes, 0, bitstreamLength + 4);
-
             for (int32_t i = 0; i < resultSamples; i++) {
                 int32_t value = MIN(31, abs((int32_t) samples[i]) * 31 / peak);
                 set_bits(bytes, i * 5, value & 31);
             }
-
             (*env)->SetByteArrayRegion(env, result, 0, bitstreamLength, (jbyte *) bytes);
         }
         free(samples);
