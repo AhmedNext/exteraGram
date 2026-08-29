@@ -324,8 +324,8 @@ target_compile_options(soundtouch PUBLIC
 set_target_properties(soundtouch PROPERTIES
         ANDROID_ARM_MODE arm)
 target_include_directories(soundtouch PUBLIC
-        soundtouch)
-
+        ${CMAKE_CURRENT_SOURCE_DIR}/soundtouch
+        ${CMAKE_CURRENT_SOURCE_DIR})
 #voip
 include(${CMAKE_HOME_DIRECTORY}/voip/CMakeLists.txt)
 
