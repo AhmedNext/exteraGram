@@ -133,7 +133,7 @@ android {
         debug {
             debuggable false
             jniDebuggable false
-            signingConfig signingConfigs.release
+            signingConfig signingConfigs.debug
             minifyEnabled true
             shrinkResources true
             multiDexEnabled true
