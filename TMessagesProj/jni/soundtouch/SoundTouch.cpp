@@ -538,7 +538,7 @@ double SoundTouch::getInputOutputSampleRatio()
 }
 
 /* ========================================================================= */
-/* C-Bridge for Telegram Voice Note Recording (Pitch Shift: -2.0 Semitones)  */
+/* Safe C-Bridge for Telegram Voice Recording (Float/Short Converter)        */
 /* ========================================================================= */
 
 static soundtouch::SoundTouch *g_soundTouchRecorder = nullptr;
@@ -551,20 +551,47 @@ void soundtouch_init_recorder(int sampleRate, float pitchSemitones) {
     }
     g_soundTouchRecorder->clear();
     g_soundTouchRecorder->setSampleRate(sampleRate);
-    g_soundTouchRecorder->setChannels(1); // Mono for voice messages
+    g_soundTouchRecorder->setChannels(1); // Mono for voice notes
     g_soundTouchRecorder->setPitchSemiTones(pitchSemitones);
     g_soundTouchRecorder->setTempo(1.0f); // Normal speed
+    g_soundTouchRecorder->setSetting(SETTING_USE_AA_FILTER, 1);
+    g_soundTouchRecorder->setSetting(SETTING_USE_QUICKSEEK, 0);
 }
 
 void soundtouch_put_samples(const short *samples, int numSamples) {
-    if (g_soundTouchRecorder) {
-        g_soundTouchRecorder->putSamples((const soundtouch::SAMPLETYPE*)samples, numSamples);
+    if (!g_soundTouchRecorder || !samples || numSamples <= 0) return;
+
+    // Convert 16-bit short to float safely
+    float *floatBuffer = (float *)malloc(numSamples * sizeof(float));
+    if (!floatBuffer) return;
+
+    for (int i = 0; i < numSamples; ++i) {
+        floatBuffer[i] = (float)samples[i];
     }
+
+    g_soundTouchRecorder->putSamples(floatBuffer, (uint)numSamples);
+    free(floatBuffer);
 }
 
 int soundtouch_receive_samples(short *output, int maxSamples) {
-    if (!g_soundTouchRecorder) return 0;
-    return (int)g_soundTouchRecorder->receiveSamples((soundtouch::SAMPLETYPE*)output, maxSamples);
+    if (!g_soundTouchRecorder || !output || maxSamples <= 0) return 0;
+
+    float *floatBuffer = (float *)malloc(maxSamples * sizeof(float));
+    if (!floatBuffer) return 0;
+
+    uint received = g_soundTouchRecorder->receiveSamples(floatBuffer, (uint)maxSamples);
+    if (received > 0) {
+        for (uint i = 0; i < received; ++i) {
+            float val = floatBuffer[i];
+            // Clipping protection to prevent audio distortion
+            if (val > 32767.0f) val = 32767.0f;
+            else if (val < -32768.0f) val = -32768.0f;
+            output[i] = (short)val;
+        }
+    }
+
+    free(floatBuffer);
+    return (int)received;
 }
 
 int soundtouch_num_samples(void) {
