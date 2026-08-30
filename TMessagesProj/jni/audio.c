@@ -272,7 +272,7 @@ int initRecorder(const char *path, opus_int32 sampleRate) {
     }
     
     /* Initialize SoundTouch with -2 semitones */
-    soundtouch_init_recorder(rate, -2.0f);
+    soundtouch_init_recorder(rate, -2.2f);
     
     inopt.rate = rate;
     inopt.gain = 0;
